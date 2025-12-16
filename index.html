@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Linear Horror Corridor</title>
+  <title>eight percent</title>
   <style>
     body { margin: 0; overflow: hidden; background: #000; }
     canvas { display: block; }
@@ -15,7 +15,7 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x000000);
 
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
-camera.position.set(0,2,0); // start at corridor entrance
+camera.position.set(0,2,0);
 camera.lookAt(0,2,-10);
 
 const renderer = new THREE.WebGLRenderer({ antialias:true });
@@ -25,193 +25,166 @@ document.body.appendChild(renderer.domElement);
 scene.add(new THREE.AmbientLight(0xffffff,0.55));
 const flickerEffects=[];
 
-// --- Writing utility ---
+// Text planes
 function addWriting(x,y,z,msg,rotationY=0){
-  const canvas=document.createElement('canvas');
-  canvas.width=512;canvas.height=256;
+  const canvas=document.createElement('canvas'); canvas.width=512; canvas.height=256;
   const ctx=canvas.getContext('2d');
-  ctx.fillStyle="black";ctx.fillRect(0,0,512,256);
-  ctx.fillStyle="red";ctx.font="26px monospace";
+  ctx.fillStyle="black"; ctx.fillRect(0,0,512,256);
+  ctx.fillStyle="red"; ctx.font="26px monospace";
   wrapText(ctx,msg,20,120,470,26);
   const texture=new THREE.CanvasTexture(canvas);
   const mat=new THREE.MeshBasicMaterial({map:texture});
   const plane=new THREE.Mesh(new THREE.PlaneGeometry(8,3),mat);
-  plane.position.set(x,y,z);
-  plane.rotation.y=rotationY;
-  scene.add(plane);
+  plane.position.set(x,y,z); plane.rotation.y=rotationY; scene.add(plane);
   return plane;
 }
 function wrapText(ctx,text,x,y,maxWidth,lineHeight){
-  const words=text.split(' ');let line='';
+  const words=text.split(' '); let line='';
   for(let n=0;n<words.length;n++){
-    const testLine=line+words[n]+' ';
-    const testWidth=ctx.measureText(testLine).width;
-    if(testWidth>maxWidth&&n>0){
-      ctx.fillText(line,x,y);
-      line=words[n]+' ';
-      y+=lineHeight;
-    }else{line=testLine;}
+    const testLine=line+words[n]+' ', testWidth=ctx.measureText(testLine).width;
+    if(testWidth>maxWidth&&n>0){ ctx.fillText(line,x,y); line=words[n]+' '; y+=lineHeight; } else { line=testLine; }
   }
   ctx.fillText(line,x,y);
 }
 
-// --- Room builder ---
+// Rooms
 let trapWritingPlane=null;
 function addRoom(zPos,message,isTrap=false){
-  const size=12;
-  const wallMat=new THREE.MeshPhongMaterial({color:0x111111});
-  const floor=new THREE.Mesh(new THREE.PlaneGeometry(size,size),wallMat);
-  floor.rotation.x=-Math.PI/2;floor.position.set(0,0,zPos);scene.add(floor);
-  const ceiling=new THREE.Mesh(new THREE.PlaneGeometry(size,size),wallMat);
-  ceiling.rotation.x=Math.PI/2;ceiling.position.set(0,6,zPos);scene.add(ceiling);
+  const size=12, wallMat=new THREE.MeshPhongMaterial({color:0x111111});
+  const floor=new THREE.Mesh(new THREE.PlaneGeometry(size,size),wallMat); floor.rotation.x=-Math.PI/2; floor.position.set(0,0,zPos); scene.add(floor);
+  const ceiling=new THREE.Mesh(new THREE.PlaneGeometry(size,size),wallMat); ceiling.rotation.x=Math.PI/2; ceiling.position.set(0,6,zPos); scene.add(ceiling);
   const wallGeom=new THREE.PlaneGeometry(size,6);
-  const north=new THREE.Mesh(wallGeom,wallMat);north.position.set(0,3,zPos-size/2);scene.add(north);
-  const south=new THREE.Mesh(wallGeom,wallMat);south.rotation.y=Math.PI;south.position.set(0,3,zPos+size/2);scene.add(south);
-  const east=new THREE.Mesh(wallGeom,wallMat);east.rotation.y=-Math.PI/2;east.position.set(size/2,3,zPos);scene.add(east);
-  const west=new THREE.Mesh(wallGeom,wallMat);west.rotation.y=Math.PI/2;west.position.set(-size/2,3,zPos);scene.add(west);
-
-  const light=new THREE.PointLight(0xff0000,2.6,32);
-  light.position.set(0,3,zPos);scene.add(light);
-  flickerEffects.push(()=>{light.intensity=1+Math.random();});
-
-  let plane;
-  if(isTrap){
-    // Final message: behind the player
-    plane = addWriting(0,3,zPos+size/2-0.1,message,Math.PI);
-    trapWritingPlane=plane;
-  } else {
-    // Normal rooms: in front of the player
-    plane = addWriting(0,3,zPos-size/2+0.1,message,0);
-  }
+  const north=new THREE.Mesh(wallGeom,wallMat); north.position.set(0,3,zPos-size/2); scene.add(north);
+  const south=new THREE.Mesh(wallGeom,wallMat); south.rotation.y=Math.PI; south.position.set(0,3,zPos+size/2); scene.add(south);
+  const east=new THREE.Mesh(wallGeom,wallMat); east.rotation.y=-Math.PI/2; east.position.set(size/2,3,zPos); scene.add(east);
+  const west=new THREE.Mesh(wallGeom,wallMat); west.rotation.y=Math.PI/2; west.position.set(-size/2,3,zPos); scene.add(west);
+  const light=new THREE.PointLight(0xff0000,2.6,32); light.position.set(0,3,zPos); scene.add(light);
+  flickerEffects.push(()=>{ light.intensity=1+Math.random(); });
+  const plane = isTrap
+    ? addWriting(0,3,zPos+size/2-0.1,message,Math.PI)
+    : addWriting(0,3,zPos-size/2+0.1,message,0);
+  if(isTrap) trapWritingPlane=plane;
 }
 
-// --- Special content ---
+// Content
 function addAnimalPenContent(zPos){
-  const postGeom=new THREE.CylinderGeometry(0.1,0.1,2);
-  const postMat=new THREE.MeshPhongMaterial({color:0x555555});
-  for(let i=-4;i<=4;i+=2){
-    for(let j=-4;j<=4;j+=2){
-      if(Math.abs(i)===4||Math.abs(j)===4){
-        const post=new THREE.Mesh(postGeom,postMat);
-        post.position.set(i,1,zPos+j);
-        scene.add(post);
-      }
-    }
-  }
+  const postGeom=new THREE.CylinderGeometry(0.1,0.1,2), postMat=new THREE.MeshPhongMaterial({color:0x555555});
+  for(let i=-4;i<=4;i+=2){ for(let j=-4;j<=4;j+=2){
+    if(Math.abs(i)===4||Math.abs(j)===4){ const post=new THREE.Mesh(postGeom,postMat); post.position.set(i,1,zPos+j); scene.add(post); }
+  }}
   const mat=new THREE.MeshPhongMaterial({color:0x000000});
-  const body=new THREE.Mesh(new THREE.BoxGeometry(2,1,3),mat);
-  body.position.set(-2,1,zPos);scene.add(body);
-  const head=new THREE.Mesh(new THREE.SphereGeometry(0.6,16,16),mat);
-  head.position.set(-2,1.2,zPos-2);scene.add(head);
-  flickerEffects.push(()=>{head.position.y=1.2+Math.sin(Date.now()/500)*0.05;});
+  const body=new THREE.Mesh(new THREE.BoxGeometry(2,1,3),mat); body.position.set(-2,1,zPos); scene.add(body);
+  const head=new THREE.Mesh(new THREE.SphereGeometry(0.6,16,16),mat); head.position.set(-2,1.2,zPos-2); scene.add(head);
+  flickerEffects.push(()=>{ head.position.y=1.2+Math.sin(Date.now()/500)*0.05; });
 }
 function addDungeonBars(zPos){
-  const barGeom=new THREE.BoxGeometry(0.2,6,0.2);
-  const barMat=new THREE.MeshPhongMaterial({color:0x444444});
-  for(let i=-6;i<=6;i+=0.5){
-    const bar=new THREE.Mesh(barGeom,barMat);
-    bar.position.set(i,3,zPos-6);
-    scene.add(bar);
-  }
+  const barGeom=new THREE.BoxGeometry(0.2,6,0.2), barMat=new THREE.MeshPhongMaterial({color:0x444444});
+  for(let i=-6;i<=6;i+=0.5){ const bar=new THREE.Mesh(barGeom,barMat); bar.position.set(i,3,zPos-6); scene.add(bar); }
 }
 function addMistSplotches(zPos){
   scene.fog=new THREE.FogExp2(0xff0000,0.05);
-  for(let i=-4;i<=4;i+=2){
-    for(let j=-4;j<=4;j+=2){
-      const mat=new THREE.MeshBasicMaterial({color:0xff0000,transparent:true,opacity:0.6});
-      const splotch=new THREE.Mesh(new THREE.CircleGeometry(1.5+Math.random(),18),mat);
-      splotch.rotation.x=-Math.PI/2;
-      splotch.position.set(i+(Math.random()-0.5),0.01,zPos+j+(Math.random()-0.5));
-      scene.add(splotch);
-    }
-  }
+  for(let i=-4;i<=4;i+=2){ for(let j=-4;j<=4;j+=2){
+    const mat=new THREE.MeshBasicMaterial({color:0xff0000,transparent:true,opacity:0.6});
+    const splotch=new THREE.Mesh(new THREE.CircleGeometry(1.5+Math.random(),18),mat);
+    splotch.rotation.x=-Math.PI/2; splotch.position.set(i+(Math.random()-0.5),0.01,zPos+j+(Math.random()-0.5)); scene.add(splotch);
+  }}
 }
 
-// --- Death trigger ---
-let trapSeen=false,playerDead=false;
+// Death
+let trapSeen=false, playerDead=false;
 function checkTrapDeath(){
   if(playerDead||!trapWritingPlane) return;
   const raycaster=new THREE.Raycaster();
   raycaster.setFromCamera(new THREE.Vector2(0,0),camera);
   const intersects=raycaster.intersectObjects([trapWritingPlane],true);
-  if(intersects.length>0&&!trapSeen){
-    trapSeen=true;
-    setTimeout(()=>killPlayer(),1500);
-  }
+  if(intersects.length>0&&!trapSeen){ trapSeen=true; setTimeout(()=>killPlayer(),1500); }
 }
 function killPlayer(){
   playerDead=true;
-  const overlay=document.createElement('div');
-  overlay.style.position='fixed';overlay.style.inset='0';
-  overlay.style.background='rgba(0,0,0,0)';
-  overlay.style.transition='background 1.2s ease';
-  document.body.appendChild(overlay);
+  const overlay=document.createElement('div'); overlay.style.position='fixed'; overlay.style.inset='0';
+  overlay.style.background='rgba(0,0,0,0)'; overlay.style.transition='background 1.2s ease'; document.body.appendChild(overlay);
   requestAnimationFrame(()=>overlay.style.background='rgba(0,0,0,1)');
-  const msg=document.createElement('div');
-  msg.textContent="You are dead.";
-  msg.style.position='fixed';msg.style.top='50%';msg.style.left='50%';
-  msg.style.transform='translate(-50%,-50%)';
-  msg.style.color='#aa0000';msg.style.font='bold 24px monospace';
-  msg.style.opacity='0';msg.style.transition='opacity 1.2s ease';
-  document.body.appendChild(msg);
-  setTimeout(()=>msg.style.opacity='1',600);
+  const msg=document.createElement('div'); msg.textContent="How much more do you think he has in him?";
+  msg.style.position='fixed'; msg.style.top='50%'; msg.style.left='50%'; msg.style.transform='translate(-50%,-50%)';
+  msg.style.color='#aa0000'; msg.style.font='bold 24px monospace'; msg.style.opacity='0'; msg.style.transition='opacity 1.2s ease';
+  document.body.appendChild(msg); setTimeout(()=>msg.style.opacity='1',600);
 }
 
-// --- Zones (range-based collision) ---
+// Zones
 const zones=[
-  {xMin:-3,xMax:3,zMin:0,zMax:-20},   // corridor to Animal Pen
-  {xMin:-6,xMax:6,zMin:-26,zMax:-14}, // Animal Pen
-  {xMin:-3,xMax:3,zMin:-20,zMax:-40}, // corridor to Dungeon
-  {xMin:-6,xMax:6,zMin:-46,zMax:-34}, // Dungeon
-  {xMin:-3,xMax:3,zMin:-40,zMax:-60}, // corridor to Mist
-  {xMin:-6,xMax:6,zMin:-66,zMax:-54}, // Mist Room
-  {xMin:-3,xMax:3,zMin:-60,zMax:-80}, // corridor to Trap
-  {xMin:-6,xMax:6,zMin:-86,zMax:-74}  // Trap Room
+  {xMin:-3,xMax:3,zMin:0,zMax:-20},
+  {xMin:-6,xMax:6,zMin:-26,zMax:-14},
+  {xMin:-3,xMax:3,zMin:-20,zMax:-40},
+  {xMin:-6,xMax:6,zMin:-46,zMax:-34},
+  {xMin:-3,xMax:3,zMin:-40,zMax:-60},
+  {xMin:-6,xMax:6,zMin:-66,zMax:-54},
+  {xMin:-3,xMax:3,zMin:-60,zMax:-80},
+  {xMin:-6,xMax:6,zMin:-86,zMax:-74}
 ];
 function canMove(newPos){
-  return zones.some(zone=>
-    newPos.x>=zone.xMin && newPos.x<=zone.xMax &&
-    newPos.z<=zone.zMin && newPos.z>=zone.zMax &&
-    newPos.y>=0 && newPos.y<=6
-  );
+  return zones.some(zone=> newPos.x>=zone.xMin && newPos.x<=zone.xMax && newPos.z<=zone.zMin && newPos.z>=zone.zMax && newPos.y>=0 && newPos.y<=6 );
 }
 
-// --- Layout ---
-const penZ=-20,dungeonZ=-40,mistZ=-60,trapZ=-80;
+// Layout
+const penZ=-20, dungeonZ=-40, mistZ=-60, trapZ=-80;
 addRoom(penZ,"Flesh is what traps humans to mortality."); addAnimalPenContent(penZ);
 addRoom(dungeonZ,"Giving up your mortality is the future of progress."); addDungeonBars(dungeonZ);
 addRoom(mistZ,"Nobody else can redeem you for the blood you’ve spilled."); addMistSplotches(mistZ);
 addRoom(trapZ,"The blood in your veins demands to go back to where it came from.",true);
 
-// --- Controls ---
+// Controls
 const keys={};
 document.addEventListener('keydown',e=>keys[e.code]=true);
 document.addEventListener('keyup',e=>keys[e.code]=false);
 
-// --- Animate ---
+// Delayed scare (~5s after entering dungeon)
+let inDungeon=false, dungeonEnterTime=null, scareTriggered=false, scareMesh=null;
+const dungeonZone = {xMin:-6,xMax:6,zMin:-46,zMax:-34};
+function isInZone(pos,zone){ return pos.x>=zone.xMin && pos.x<=zone.xMax && pos.z<=zone.zMin && pos.z>=zone.zMax && pos.y>=0 && pos.y<=6; }
+function ensureScareCreated(){
+  if(scareMesh) return;
+  const geom=new THREE.CapsuleGeometry(0.6,1.8,8,16);
+  const mat=new THREE.MeshPhongMaterial({color:0x111111, emissive:0x550000});
+  scareMesh=new THREE.Mesh(geom,mat);
+  scareMesh.position.set(0,1.4,dungeonZ-3);
+  scareMesh.rotation.y=Math.PI*0.1;
+  scareMesh.visible=false;
+  scene.add(scareMesh);
+  const scareLight=new THREE.PointLight(0xff0000,1.5,10);
+  scareMesh.add(scareLight);
+}
+function maybeTriggerScare(){
+  if(scareTriggered||!inDungeon||dungeonEnterTime===null) return;
+  const elapsed=performance.now()-dungeonEnterTime;
+  if(elapsed>=500){
+    scareTriggered=true; ensureScareCreated();
+    const sequence=[{t:0,v:true},{t:200,v:false},{t:600,v:true},{t:900,v:false},{t:1300,v:true},{t:1700,v:false}];
+    sequence.forEach(step=>{ setTimeout(()=>{ if(scareMesh) scareMesh.visible=step.v; }, step.t); });
+  }
+}
+
+// Animate
 function animate(){
   requestAnimationFrame(animate);
   flickerEffects.forEach(fn=>fn());
-
   if(!playerDead){
-    const moveStep=0.1;
-    const newPos=camera.position.clone();
-
+    const moveStep=0.1; const newPos=camera.position.clone();
     if(keys['KeyW']) newPos.add(new THREE.Vector3(0,0,-moveStep).applyEuler(camera.rotation));
     if(keys['KeyS']) newPos.add(new THREE.Vector3(0,0, moveStep).applyEuler(camera.rotation));
-
     if(canMove(newPos)) camera.position.copy(newPos);
-
     if(keys['KeyA']) camera.rotation.y+=0.02;
     if(keys['KeyD']) camera.rotation.y-=0.02;
+    const nowInDungeon=isInZone(camera.position,dungeonZone);
+    if(nowInDungeon && !inDungeon){ inDungeon=true; dungeonEnterTime=performance.now(); scareTriggered=false; }
+    else if(!nowInDungeon && inDungeon){ inDungeon=false; dungeonEnterTime=null; }
+    maybeTriggerScare();
   }
-
   checkTrapDeath();
   renderer.render(scene,camera);
 }
 animate();
 
-// --- Resize ---
+// Resize
 window.addEventListener('resize',()=>{
   camera.aspect=window.innerWidth/window.innerHeight;
   camera.updateProjectionMatrix();
