@@ -32,25 +32,36 @@ const audioLoader = new THREE.AudioLoader();
 
 let dungeonAmbience = null;
 let mistSound = null;
+let mistAudioBuffer = null;
 let audioUnlocked = false;
 
+function tryPlayDungeonAmbienceIfReady(){
+  // Resume context defensively
+  try { if (listener.context && listener.context.state === 'suspended') listener.context.resume(); } catch(e){}
+  if (!dungeonAmbience || !dungeonAmbience.buffer) return;
+  if (audioUnlocked && !dungeonAmbience.isPlaying) {
+    try { dungeonAmbience.play(); } catch(e){ console.warn('Failed to play dungeonAmbience', e); }
+  }
+}
+
 function loadAudio() {
-  // Load dungeon ambience (non-positional)
+  // Global dungeon ambience (non-positional) — should play from the beginning once unlocked and loaded.
   dungeonAmbience = new THREE.Audio(listener);
   audioLoader.load('dungeonambience.mp3',
     (buffer) => {
       dungeonAmbience.setBuffer(buffer);
       dungeonAmbience.setLoop(true);
       dungeonAmbience.setVolume(0.45);
+      // Try to play immediately if we've already been unlocked
+      tryPlayDungeonAmbienceIfReady();
     },
     undefined,
     (err) => { console.warn('Failed to load dungeonambience.mp3', err); }
   );
 
-  // Load mist positional sound (buffer assigned, actual PositionalAudio created and attached in addMistSplotches)
+  // Mist positional sound (buffer assigned; PositionalAudio created in addMistSplotches or when buffer arrives)
   audioLoader.load('mist.mp3.mp3',
     (buffer) => {
-      // keep buffer for use when creating PositionalAudio
       mistAudioBuffer = buffer;
     },
     undefined,
@@ -58,26 +69,19 @@ function loadAudio() {
   );
 }
 
-// small holder for mist buffer until we create positional audio in addMistSplotches
-let mistAudioBuffer = null;
-
 function unlockAudio() {
   if (audioUnlocked) return;
   audioUnlocked = true;
-  // Resume audio context (some browsers suspend until user interaction)
   try {
     if (listener.context && listener.context.state === 'suspended') {
       listener.context.resume();
     }
-  } catch (e) { /* ignore */ }
-
-  // Start mist sound if created
-  if (mistSound && !mistSound.isPlaying) {
+  } catch (e) {}
+  // Start global ambience if ready
+  tryPlayDungeonAmbienceIfReady();
+  // Start mist if player is already inside mist and mistSound exists
+  if (mistSound && inMist && !mistSound.isPlaying) {
     try { mistSound.play(); } catch(e) {}
-  }
-  // Play dungeon ambience if player already in dungeon
-  if (dungeonAmbience && inDungeon && !dungeonAmbience.isPlaying) {
-    try { dungeonAmbience.play(); } catch(e) {}
   }
 }
 
@@ -143,33 +147,23 @@ function addDungeonBars(zPos){
 }
 function addMistSplotches(zPos){
   scene.fog=new THREE.FogExp2(0xff0000,0.05);
-  const mistGroup = new THREE.Object3D();
-  mistGroup.position.set(0,0,zPos);
   for(let i=-4;i<=4;i+=2){ for(let j=-4;j<=4;j+=2){
     const mat=new THREE.MeshBasicMaterial({color:0xff0000,transparent:true,opacity:0.6});
     const splotch=new THREE.Mesh(new THREE.CircleGeometry(1.5+Math.random(),18),mat);
     splotch.rotation.x=-Math.PI/2; splotch.position.set(i+(Math.random()-0.5),0.01,zPos+j+(Math.random()-0.5)); scene.add(splotch);
   }}
-  // Create a positional audio source at the center of the mist group
-  if (mistAudioBuffer) {
+  // If the buffer is already loaded we create a positional source to attach to the scene.
+  if (mistAudioBuffer && !mistSound) {
     mistSound = new THREE.PositionalAudio(listener);
     mistSound.setBuffer(mistAudioBuffer);
-    mistSound.setLoop(true);
+    mistSound.setLoop(true); // still loop when played
     mistSound.setRefDistance(6);
     mistSound.setRolloffFactor(1);
     mistSound.setVolume(0.8);
-    // Attach to an invisible object positioned at the center of the mist
     const audioHolder = new THREE.Object3D();
     audioHolder.position.set(0,1.5,zPos);
     audioHolder.add(mistSound);
     scene.add(audioHolder);
-    // only play after user interaction (unlockAudio will start it)
-    if (audioUnlocked) {
-      try { mistSound.play(); } catch(e) {}
-    }
-  } else {
-    // If buffer isn't yet loaded, create a placeholder and start once buffer arrives in loader callback
-    // loader callback will create and play when appropriate
   }
 }
 
@@ -246,6 +240,11 @@ function maybeTriggerScare(){
   }
 }
 
+// MIST: play only while inside
+let inMist = false;
+const mistRadiusX = 6; // x bounds
+const mistHalfDepth = 6; // how far in z from mistZ to consider "inside"
+
 // Animate
 function animate(){
   requestAnimationFrame(animate);
@@ -257,22 +256,30 @@ function animate(){
     if(canMove(newPos)) camera.position.copy(newPos);
     if(keys['KeyA']) camera.rotation.y+=0.02;
     if(keys['KeyD']) camera.rotation.y-=0.02;
+
+    // Dungeon enter/exit handling remains only for the scare timing; ambient is global and not toggled on zone
     const nowInDungeon=isInZone(camera.position,dungeonZone);
-    if(nowInDungeon && !inDungeon){
-      inDungeon=true; dungeonEnterTime=performance.now(); scareTriggered=false;
-      // Start dungeon ambience on entering dungeon (if unlocked and buffer ready)
-      if (dungeonAmbience && audioUnlocked && !dungeonAmbience.isPlaying) {
-        try { dungeonAmbience.play(); } catch(e) {}
-      }
-    }
-    else if(!nowInDungeon && inDungeon){
-      inDungeon=false; dungeonEnterTime=null;
-      // Stop dungeon ambience when exiting
-      if (dungeonAmbience && dungeonAmbience.isPlaying) {
-        try { dungeonAmbience.stop(); } catch(e) {}
-      }
-    }
+    if(nowInDungeon && !inDungeon){ inDungeon=true; dungeonEnterTime=performance.now(); scareTriggered=false; }
+    else if(!nowInDungeon && inDungeon){ inDungeon=false; dungeonEnterTime=null; }
     maybeTriggerScare();
+
+    // Mist zone detection (we use a simple bounding area around the mist center)
+    const nowInMist = Math.abs(camera.position.x) <= mistRadiusX
+      && camera.position.z <= (mistZ + mistHalfDepth)
+      && camera.position.z >= (mistZ - mistHalfDepth)
+      && camera.position.y >= 0 && camera.position.y <= 6;
+
+    if (nowInMist && !inMist) {
+      inMist = true;
+      if (mistSound && audioUnlocked && !mistSound.isPlaying) {
+        try { mistSound.play(); } catch(e) {}
+      }
+    } else if (!nowInMist && inMist) {
+      inMist = false;
+      if (mistSound && mistSound.isPlaying) {
+        try { mistSound.stop(); } catch(e) {}
+      }
+    }
   }
   checkTrapDeath();
   renderer.render(scene,camera);
@@ -289,14 +296,9 @@ window.addEventListener('resize',()=>{
 // Start loading audio resources
 loadAudio();
 
-// If mist buffer wasn't available when addMistSplotches ran, create positional audio when it loads
-// (the loader callback above stores buffer in mistAudioBuffer; but if it arrives after addMistSplotches, create the positional audio)
-// We'll poll briefly until buffer is set, then create the PositionalAudio if needed
+// If the mist buffer loads after addMistSplotches, ensure we create the PositionalAudio and attach it (but don't auto-play; play is controlled by zone)
 (function waitForMistBuffer() {
   if (mistAudioBuffer && !mistSound) {
-    // create the mist positional audio at the mist position
-    // find mist position (we used mistZ variable)
-    // create positional audio and attach
     mistSound = new THREE.PositionalAudio(listener);
     mistSound.setBuffer(mistAudioBuffer);
     mistSound.setLoop(true);
@@ -307,7 +309,8 @@ loadAudio();
     audioHolder.position.set(0,1.5,mistZ);
     audioHolder.add(mistSound);
     scene.add(audioHolder);
-    if (audioUnlocked) {
+    // Do not auto-play — play is controlled by zone membership
+    if (audioUnlocked && inMist && !mistSound.isPlaying) {
       try { mistSound.play(); } catch(e) {}
     }
   } else if (!mistAudioBuffer) {
