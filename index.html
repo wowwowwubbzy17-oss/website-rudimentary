@@ -35,34 +35,71 @@ let mistSound = null;
 let mistAudioBuffer = null;
 let audioUnlocked = false;
 
-function tryPlayDungeonAmbienceIfReady(){
-  // Resume context defensively
-  try { if (listener.context && listener.context.state === 'suspended') listener.context.resume(); } catch(e){}
+// target volumes / fade durations
+const DUNGEON_TARGET_VOLUME = 0.35;
+const DUNGEON_FADE_MS = 1500;
+const MIST_VOLUME = 0.18;
+const MIST_REF_DISTANCE = 4;
+
+function resumeAudioContextIfSuspended() {
+  try {
+    if (listener.context && listener.context.state === 'suspended') {
+      listener.context.resume();
+    }
+  } catch (e) {}
+}
+
+function fadeAudio(audio, from, to, durationMs) {
+  // Simple step-based fade using setInterval — works with THREE.Audio.setVolume
+  const steps = Math.max(6, Math.round(durationMs / 60)); // ~60ms per step
+  let step = 0;
+  audio.setVolume(from);
+  const iv = setInterval(() => {
+    step++;
+    const t = step / steps;
+    const v = from + (to - from) * t;
+    audio.setVolume(Math.max(0, Math.min(1, v)));
+    if (step >= steps) clearInterval(iv);
+  }, durationMs / steps);
+}
+
+function tryStartDungeonIfReady() {
+  // Make sure audio context is resumed before attempting to play
+  resumeAudioContextIfSuspended();
   if (!dungeonAmbience || !dungeonAmbience.buffer) return;
-  if (audioUnlocked && !dungeonAmbience.isPlaying) {
-    try { dungeonAmbience.play(); } catch(e){ console.warn('Failed to play dungeonAmbience', e); }
+  if (!audioUnlocked) return;
+  if (dungeonAmbience.isPlaying) return;
+  try {
+    // start muted then fade in to avoid a pop
+    dungeonAmbience.setVolume(0);
+    dungeonAmbience.play();
+    // fade in
+    fadeAudio(dungeonAmbience, 0, DUNGEON_TARGET_VOLUME, DUNGEON_FADE_MS);
+  } catch (e) {
+    console.warn('Could not start dungeon ambience:', e);
   }
 }
 
 function loadAudio() {
-  // Global dungeon ambience (non-positional) — should play from the beginning once unlocked and loaded.
+  // Global dungeon ambience (non-positional)
   dungeonAmbience = new THREE.Audio(listener);
   audioLoader.load('dungeonambience.mp3',
     (buffer) => {
       dungeonAmbience.setBuffer(buffer);
       dungeonAmbience.setLoop(true);
-      dungeonAmbience.setVolume(0.85);
-      // Try to play immediately if we've already been unlocked
-      tryPlayDungeonAmbienceIfReady();
+      dungeonAmbience.setVolume(0); // start at 0 and fade in when ready
+      // Try to start now if unlocked
+      tryStartDungeonIfReady();
     },
     undefined,
     (err) => { console.warn('Failed to load dungeonambience.mp3', err); }
   );
 
-  // Mist positional sound (buffer assigned; PositionalAudio created in addMistSplotches or when buffer arrives)
+  // Mist positional sound
   audioLoader.load('mist.mp3.mp3',
     (buffer) => {
       mistAudioBuffer = buffer;
+      // If mist area already created / waiting, waitForMistBuffer logic will attach and control play
     },
     undefined,
     (err) => { console.warn('Failed to load mist.mp3.mp3', err); }
@@ -72,16 +109,14 @@ function loadAudio() {
 function unlockAudio() {
   if (audioUnlocked) return;
   audioUnlocked = true;
-  try {
-    if (listener.context && listener.context.state === 'suspended') {
-      listener.context.resume();
-    }
-  } catch (e) {}
-  // Start global ambience if ready
-  tryPlayDungeonAmbienceIfReady();
+  resumeAudioContextIfSuspended();
+
+  // Start dungeon ambience if ready
+  tryStartDungeonIfReady();
+
   // Start mist if player is already inside mist and mistSound exists
   if (mistSound && inMist && !mistSound.isPlaying) {
-    try { mistSound.play(); } catch(e) {}
+    try { mistSound.play(); } catch (e) { console.warn('Failed to play mist after unlock', e); }
   }
 }
 
@@ -152,18 +187,22 @@ function addMistSplotches(zPos){
     const splotch=new THREE.Mesh(new THREE.CircleGeometry(1.5+Math.random(),18),mat);
     splotch.rotation.x=-Math.PI/2; splotch.position.set(i+(Math.random()-0.5),0.01,zPos+j+(Math.random()-0.5)); scene.add(splotch);
   }}
-  // If the buffer is already loaded we create a positional source to attach to the scene.
+  // If the mist buffer is ready, create a positional source
   if (mistAudioBuffer && !mistSound) {
     mistSound = new THREE.PositionalAudio(listener);
     mistSound.setBuffer(mistAudioBuffer);
-    mistSound.setLoop(true); // still loop when played
-    mistSound.setRefDistance(6);
+    mistSound.setLoop(true);
+    mistSound.setRefDistance(MIST_REF_DISTANCE);
     mistSound.setRolloffFactor(1);
-    mistSound.setVolume(0.8);
+    mistSound.setVolume(MIST_VOLUME);
     const audioHolder = new THREE.Object3D();
     audioHolder.position.set(0,1.5,zPos);
     audioHolder.add(mistSound);
     scene.add(audioHolder);
+    // Do not auto-play — play is controlled by zone membership. If already inside & unlocked, start it.
+    if (audioUnlocked && inMist && !mistSound.isPlaying) {
+      try { mistSound.play(); } catch(e) { console.warn('Failed to auto-play mistSound after buffer attach', e); }
+    }
   }
 }
 
@@ -272,12 +311,12 @@ function animate(){
     if (nowInMist && !inMist) {
       inMist = true;
       if (mistSound && audioUnlocked && !mistSound.isPlaying) {
-        try { mistSound.play(); } catch(e) {}
+        try { mistSound.play(); } catch(e) { console.warn('Failed to play mistSound on enter', e); }
       }
     } else if (!nowInMist && inMist) {
       inMist = false;
       if (mistSound && mistSound.isPlaying) {
-        try { mistSound.stop(); } catch(e) {}
+        try { mistSound.stop(); } catch(e) { console.warn('Failed to stop mistSound on exit', e); }
       }
     }
   }
@@ -302,16 +341,16 @@ loadAudio();
     mistSound = new THREE.PositionalAudio(listener);
     mistSound.setBuffer(mistAudioBuffer);
     mistSound.setLoop(true);
-    mistSound.setRefDistance(6);
+    mistSound.setRefDistance(MIST_REF_DISTANCE);
     mistSound.setRolloffFactor(1);
-    mistSound.setVolume(0.8);
+    mistSound.setVolume(MIST_VOLUME);
     const audioHolder = new THREE.Object3D();
     audioHolder.position.set(0,1.5,mistZ);
     audioHolder.add(mistSound);
     scene.add(audioHolder);
     // Do not auto-play — play is controlled by zone membership
     if (audioUnlocked && inMist && !mistSound.isPlaying) {
-      try { mistSound.play(); } catch(e) {}
+      try { mistSound.play(); } catch(e) { console.warn('Failed to play mistSound after buffer arrived', e); }
     }
   } else if (!mistAudioBuffer) {
     setTimeout(waitForMistBuffer, 200);
@@ -320,4 +359,3 @@ loadAudio();
 </script>
 </body>
 </html>
-
