@@ -25,7 +25,67 @@ document.body.appendChild(renderer.domElement);
 scene.add(new THREE.AmbientLight(0xffffff,0.55));
 const flickerEffects=[];
 
-// Text planes
+// --- Audio setup ---
+const listener = new THREE.AudioListener();
+camera.add(listener);
+const audioLoader = new THREE.AudioLoader();
+
+let dungeonAmbience = null;
+let mistSound = null;
+let audioUnlocked = false;
+
+function loadAudio() {
+  // Load dungeon ambience (non-positional)
+  dungeonAmbience = new THREE.Audio(listener);
+  audioLoader.load('dungeonambience.mp3',
+    (buffer) => {
+      dungeonAmbience.setBuffer(buffer);
+      dungeonAmbience.setLoop(true);
+      dungeonAmbience.setVolume(0.45);
+    },
+    undefined,
+    (err) => { console.warn('Failed to load dungeonambience.mp3', err); }
+  );
+
+  // Load mist positional sound (buffer assigned, actual PositionalAudio created and attached in addMistSplotches)
+  audioLoader.load('mist.mp3.mp3',
+    (buffer) => {
+      // keep buffer for use when creating PositionalAudio
+      mistAudioBuffer = buffer;
+    },
+    undefined,
+    (err) => { console.warn('Failed to load mist.mp3.mp3', err); }
+  );
+}
+
+// small holder for mist buffer until we create positional audio in addMistSplotches
+let mistAudioBuffer = null;
+
+function unlockAudio() {
+  if (audioUnlocked) return;
+  audioUnlocked = true;
+  // Resume audio context (some browsers suspend until user interaction)
+  try {
+    if (listener.context && listener.context.state === 'suspended') {
+      listener.context.resume();
+    }
+  } catch (e) { /* ignore */ }
+
+  // Start mist sound if created
+  if (mistSound && !mistSound.isPlaying) {
+    try { mistSound.play(); } catch(e) {}
+  }
+  // Play dungeon ambience if player already in dungeon
+  if (dungeonAmbience && inDungeon && !dungeonAmbience.isPlaying) {
+    try { dungeonAmbience.play(); } catch(e) {}
+  }
+}
+
+// Unlock on first user interaction to satisfy autoplay policies
+document.addEventListener('click', unlockAudio, { once: true });
+document.addEventListener('keydown', unlockAudio, { once: true });
+
+// --- Text planes ---
 function addWriting(x,y,z,msg,rotationY=0){
   const canvas=document.createElement('canvas'); canvas.width=512; canvas.height=256;
   const ctx=canvas.getContext('2d');
@@ -83,11 +143,34 @@ function addDungeonBars(zPos){
 }
 function addMistSplotches(zPos){
   scene.fog=new THREE.FogExp2(0xff0000,0.05);
+  const mistGroup = new THREE.Object3D();
+  mistGroup.position.set(0,0,zPos);
   for(let i=-4;i<=4;i+=2){ for(let j=-4;j<=4;j+=2){
     const mat=new THREE.MeshBasicMaterial({color:0xff0000,transparent:true,opacity:0.6});
     const splotch=new THREE.Mesh(new THREE.CircleGeometry(1.5+Math.random(),18),mat);
     splotch.rotation.x=-Math.PI/2; splotch.position.set(i+(Math.random()-0.5),0.01,zPos+j+(Math.random()-0.5)); scene.add(splotch);
   }}
+  // Create a positional audio source at the center of the mist group
+  if (mistAudioBuffer) {
+    mistSound = new THREE.PositionalAudio(listener);
+    mistSound.setBuffer(mistAudioBuffer);
+    mistSound.setLoop(true);
+    mistSound.setRefDistance(6);
+    mistSound.setRolloffFactor(1);
+    mistSound.setVolume(0.8);
+    // Attach to an invisible object positioned at the center of the mist
+    const audioHolder = new THREE.Object3D();
+    audioHolder.position.set(0,1.5,zPos);
+    audioHolder.add(mistSound);
+    scene.add(audioHolder);
+    // only play after user interaction (unlockAudio will start it)
+    if (audioUnlocked) {
+      try { mistSound.play(); } catch(e) {}
+    }
+  } else {
+    // If buffer isn't yet loaded, create a placeholder and start once buffer arrives in loader callback
+    // loader callback will create and play when appropriate
+  }
 }
 
 // Death
@@ -175,8 +258,20 @@ function animate(){
     if(keys['KeyA']) camera.rotation.y+=0.02;
     if(keys['KeyD']) camera.rotation.y-=0.02;
     const nowInDungeon=isInZone(camera.position,dungeonZone);
-    if(nowInDungeon && !inDungeon){ inDungeon=true; dungeonEnterTime=performance.now(); scareTriggered=false; }
-    else if(!nowInDungeon && inDungeon){ inDungeon=false; dungeonEnterTime=null; }
+    if(nowInDungeon && !inDungeon){
+      inDungeon=true; dungeonEnterTime=performance.now(); scareTriggered=false;
+      // Start dungeon ambience on entering dungeon (if unlocked and buffer ready)
+      if (dungeonAmbience && audioUnlocked && !dungeonAmbience.isPlaying) {
+        try { dungeonAmbience.play(); } catch(e) {}
+      }
+    }
+    else if(!nowInDungeon && inDungeon){
+      inDungeon=false; dungeonEnterTime=null;
+      // Stop dungeon ambience when exiting
+      if (dungeonAmbience && dungeonAmbience.isPlaying) {
+        try { dungeonAmbience.stop(); } catch(e) {}
+      }
+    }
     maybeTriggerScare();
   }
   checkTrapDeath();
@@ -190,6 +285,35 @@ window.addEventListener('resize',()=>{
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth,window.innerHeight);
 });
+
+// Start loading audio resources
+loadAudio();
+
+// If mist buffer wasn't available when addMistSplotches ran, create positional audio when it loads
+// (the loader callback above stores buffer in mistAudioBuffer; but if it arrives after addMistSplotches, create the positional audio)
+// We'll poll briefly until buffer is set, then create the PositionalAudio if needed
+(function waitForMistBuffer() {
+  if (mistAudioBuffer && !mistSound) {
+    // create the mist positional audio at the mist position
+    // find mist position (we used mistZ variable)
+    // create positional audio and attach
+    mistSound = new THREE.PositionalAudio(listener);
+    mistSound.setBuffer(mistAudioBuffer);
+    mistSound.setLoop(true);
+    mistSound.setRefDistance(6);
+    mistSound.setRolloffFactor(1);
+    mistSound.setVolume(0.8);
+    const audioHolder = new THREE.Object3D();
+    audioHolder.position.set(0,1.5,mistZ);
+    audioHolder.add(mistSound);
+    scene.add(audioHolder);
+    if (audioUnlocked) {
+      try { mistSound.play(); } catch(e) {}
+    }
+  } else if (!mistAudioBuffer) {
+    setTimeout(waitForMistBuffer, 200);
+  }
+})();
 </script>
 </body>
 </html>
